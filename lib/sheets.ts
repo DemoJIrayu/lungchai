@@ -1,6 +1,22 @@
 import "server-only";
 import { JWT } from "google-auth-library";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import type { Registration } from "./schema";
+import { devBrowserTest } from "./devMode";
+
+/** Browser test mode without Google configured: store rows in a local JSONL file. */
+const useLocalFile = () => devBrowserTest && !process.env.SHEET_ID;
+const LOCAL_FILE = path.join(process.cwd(), "dev-data", "registrations.jsonl");
+
+async function readLocal(): Promise<string[][]> {
+  try {
+    const txt = await fs.readFile(LOCAL_FILE, "utf8");
+    return txt.split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Column order of the Registrations tab. Row 1 of the sheet must contain these
@@ -47,6 +63,10 @@ const base = "https://sheets.googleapis.com/v4/spreadsheets";
 
 /** Return the request number of a pending row for this LINE user, if any. */
 export async function findPending(lineUserId: string): Promise<string | null> {
+  if (useLocalFile()) {
+    const hit = (await readLocal()).find((r) => r[3] === lineUserId && r[2] === "pending");
+    return hit?.[0] ?? null;
+  }
   const { id, tab } = sheetCfg();
   const range = encodeURIComponent(`${tab}!A2:D`);
   const res = await client().request<{ values?: string[][] }>({
@@ -71,7 +91,6 @@ export async function appendRegistration(args: {
   data: Registration;
   consentVersion: string;
 }) {
-  const { id, tab } = sheetCfg();
   const now = bangkokNow();
   const { data } = args;
 
@@ -96,8 +115,16 @@ export async function appendRegistration(args: {
     "",
   ];
 
+  if (useLocalFile()) {
+    await fs.mkdir(path.dirname(LOCAL_FILE), { recursive: true });
+    await fs.appendFile(LOCAL_FILE, JSON.stringify(row) + "\n", "utf8");
+    console.log(`[browser test] saved ${args.requestNo} to dev-data/registrations.jsonl`);
+    return;
+  }
+
   // valueInputOption=RAW stores every value as literal text:
   // "=IMPORTXML(...)" stays a string (no formula injection) and "0812345678" keeps its leading zero.
+  const { id, tab } = sheetCfg();
   const range = encodeURIComponent(`${tab}!A:R`);
   await client().request({
     url: `${base}/${id}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,

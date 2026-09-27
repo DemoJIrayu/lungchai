@@ -71,7 +71,7 @@ export default function Onboarding() {
     // Local UI preview without LINE (never in production builds).
     if (process.env.NODE_ENV !== "production" && params.get("preview") === "1") {
       preview.current = true;
-      setDisplayName("Preview");
+      setDisplayName("Test");
       setPhase("form");
       return;
     }
@@ -271,7 +271,12 @@ export default function Onboarding() {
   return (
     <>{header}
       <main className="wrap">
-        {displayName && <div className="note">{t.hello(displayName)}</div>}
+        {preview.current && (
+          <div className="alert" role="note">
+            TEST MODE (localhost only): LINE is skipped and a fake TEST- user is used. Nothing is sent to LINE.
+          </div>
+        )}
+        {displayName && !preview.current && <div className="note">{t.hello(displayName)}</div>}
         <form className="card" onSubmit={submit} noValidate>
           <div className="card-head">
             <h2>{t.formTitle}</h2>

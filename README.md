@@ -100,10 +100,35 @@ npm install
 npm run dev
 ```
 
-- `http://localhost:3000/?preview=1` shows the form without LINE (development builds only).
-  Submitting from preview fails at the LINE check by design.
-- To test the real flow on a phone, use the deployed URL through the rich menu, or
-  expose localhost with a tunnel and temporarily point the LIFF endpoint URL at it.
+### Test in a normal browser, no LINE account needed
+
+1. In `.env.local` set `DEV_BROWSER_TEST=1`. You can leave every other value empty.
+2. `npm run dev`, then open **http://localhost:3000/?preview=1** in Chrome, Safari, etc.
+3. Fill in the form and submit. A red TEST MODE banner shows you're in this mode.
+
+What happens in test mode:
+
+| Step | Normal | Test mode |
+|---|---|---|
+| Open outside LINE | blocked | allowed |
+| Friend check | required | skipped |
+| LINE identity | verified with LINE | fake user `TEST-xxxxxxxx` |
+| Turnstile | required | skipped if `TURNSTILE_SECRET_KEY` is empty (or use Cloudflare's always-pass test keys from `.env.example`) |
+| Where the row goes | Google Sheet | Google Sheet if `SHEET_ID` is set, otherwise `dev-data/registrations.jsonl` |
+| Approval push (notify.gs) | LINE message | skipped; `notified_at` = `skipped (test)` |
+
+Add `&lang=en` to the URL to test the English version.
+
+Test mode cannot be switched on by accident in production: it needs **both**
+`DEV_BROWSER_TEST=1` and a development server (`npm run dev`). Vercel and `next start` always
+run in production mode and ignore the flag, so a fake token is rejected there.
+
+If you test against the real Sheet, delete the `TEST-` rows afterwards.
+
+### Test the real LINE flow
+
+Use the deployed URL through the rich menu, or expose localhost with a tunnel and temporarily
+point the LIFF endpoint URL at it.
 
 ## Admin workflow
 

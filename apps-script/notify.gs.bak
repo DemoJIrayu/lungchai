@@ -106,10 +106,6 @@ function notifyRow_(sh, row) {
 
   sh.getRange(row, COL.decidedAt).setValue(now);
   if (!userId) return;
-  if (userId.indexOf('TEST-') === 0) { // row from browser test mode: no real LINE user
-    sh.getRange(row, COL.notifiedAt).setValue('skipped (test)');
-    return;
-  }
 
   const ok = pushLine_(userId, MSG[lang][status](requestNo, note), requestNo + ':' + status);
   if (ok) sh.getRange(row, COL.notifiedAt).setValue(now);

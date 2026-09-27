@@ -4,6 +4,7 @@ import { verifyLineIdToken } from "@/lib/line";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { appendRegistration, findPending } from "@/lib/sheets";
 import { newRequestNo } from "@/lib/requestNo";
+import { devBrowserTest, fakeTestUser, PREVIEW_TOKEN } from "@/lib/devMode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,14 +33,20 @@ export async function POST(req: Request) {
   const { idToken, turnstileToken, ...data } = parsed.data;
 
   try {
-    // 2. Human check.
-    const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-    if (!(await verifyTurnstile(turnstileToken, ip))) {
-      return fail(403, { error: "captcha" });
+    const testing = devBrowserTest && idToken === PREVIEW_TOKEN;
+
+    // 2. Human check. (Browser test mode may skip it when no secret is configured.)
+    const skipCaptcha = testing && !process.env.TURNSTILE_SECRET_KEY;
+    if (!skipCaptcha) {
+      const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+      if (!(await verifyTurnstile(turnstileToken, ip))) {
+        return fail(403, { error: "captcha" });
+      }
     }
 
     // 3. Who is this? Verified by LINE, not by the browser.
-    const user = await verifyLineIdToken(idToken);
+    //    Browser test mode (local dev only) invents a TEST- user instead.
+    const user = testing ? fakeTestUser() : await verifyLineIdToken(idToken);
     if (!user) return fail(401, { error: "line_auth" });
 
     // 4. One open request per LINE user.
