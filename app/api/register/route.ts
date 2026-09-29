@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { requestSchema, fieldErrors } from "@/lib/schema";
-import { verifyLineIdToken } from "@/lib/line";
 import { verifyTurnstile } from "@/lib/turnstile";
-import { appendRegistration, findPending } from "@/lib/sheets";
+import { appendRegistration, findCompany, findPending } from "@/lib/sheets";
 import { newRequestNo } from "@/lib/requestNo";
-import { devBrowserTest, fakeTestUser, PREVIEW_TOKEN } from "@/lib/devMode";
+import { resolveUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,10 +32,13 @@ export async function POST(req: Request) {
   const { idToken, turnstileToken, ...data } = parsed.data;
 
   try {
-    const testing = devBrowserTest && idToken === PREVIEW_TOKEN;
+    // 2. Who is this? Verified by LINE, not by the browser.
+    //    Browser test mode (local dev only) gives a fake TEST- user.
+    const who = await resolveUser(idToken);
+    if (!who) return fail(401, { error: "line_auth" });
 
-    // 2. Human check. (Browser test mode may skip it when no secret is configured.)
-    const skipCaptcha = testing && !process.env.TURNSTILE_SECRET_KEY;
+    // 3. Human check. Browser test mode may skip it when no secret is configured.
+    const skipCaptcha = who.testing && !process.env.TURNSTILE_SECRET_KEY;
     if (!skipCaptcha) {
       const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
       if (!(await verifyTurnstile(turnstileToken, ip))) {
@@ -44,26 +46,27 @@ export async function POST(req: Request) {
       }
     }
 
-    // 3. Who is this? Verified by LINE, not by the browser.
-    //    Browser test mode (local dev only) invents a TEST- user instead.
-    const user = testing ? fakeTestUser() : await verifyLineIdToken(idToken);
-    if (!user) return fail(401, { error: "line_auth" });
+    // 4. The company must exist in Companies_DB. The name is taken from the sheet,
+    //    never from the browser.
+    const company = await findCompany(data.companyId);
+    if (!company) return fail(422, { error: "invalid", fields: { companyId: "company" } });
 
-    // 4. One open request per LINE user.
-    const existing = await findPending(user.userId);
+    // 5. One open request per LINE user.
+    const existing = await findPending(who.user.userId);
     if (existing) return fail(409, { error: "duplicate", requestNo: existing });
 
-    // 5. Write.
+    // 6. Write.
     const requestNo = newRequestNo();
     await appendRegistration({
       requestNo,
-      lineUserId: user.userId,
-      lineDisplayName: user.displayName,
+      lineUserId: who.user.userId,
+      lineDisplayName: who.user.displayName,
+      company,
       data,
       consentVersion: process.env.CONSENT_VERSION || "pdpa-v1",
     });
 
-    return NextResponse.json({ ok: true, requestNo });
+    return NextResponse.json({ ok: true, requestNo, companyName: company.name });
   } catch (e) {
     // Log without the submitted personal data.
     console.error("register failed:", e instanceof Error ? e.message : e);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Liff } from "@line/liff";
-import { PKGS, ROLES, registrationSchema, fieldErrors, type ErrCode, type PkgId, type RoleId } from "@/lib/schema";
+import { ROLES, registrationSchema, fieldErrors, type ErrCode, type RoleId } from "@/lib/schema";
 import { T, type Lang } from "@/lib/i18n";
 import Turnstile from "./Turnstile";
 
@@ -10,25 +10,26 @@ const LIFF_ID = process.env.NEXT_PUBLIC_LIFF_ID ?? "";
 const OA = process.env.NEXT_PUBLIC_LINE_OA_ID || "@379iftpg";
 const TURNSTILE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "";
 const PRIVACY_URL = process.env.NEXT_PUBLIC_PRIVACY_URL || "#";
-const RECOMMENDED: PkgId = "standard";
 
 const OA_BASIC = OA.replace(/^@/, "");
 const ADD_FRIEND_URL = `https://line.me/R/ti/p/@${OA_BASIC}`;
 const QR_URL = `https://qr-official.line.me/gs/M_${OA_BASIC}_GW.png?oat_content=qr`;
 
 type Phase = "boot" | "outside" | "bootError" | "notFriend" | "form" | "done";
+type Company = { id: string; name: string };
+type CompanyState = { status: "loading" } | { status: "error" } | { status: "ok"; list: Company[] };
 
 type Form = {
-  company: string; nameTh: string; nameEn: string; phone: string; email: string;
-  role: RoleId; pkg: PkgId | null; pdpa: boolean;
+  companyId: string; nameTh: string; nameEn: string; phone: string; email: string;
+  role: RoleId; pdpa: boolean;
 };
-const EMPTY: Form = { company: "", nameTh: "", nameEn: "", phone: "", email: "", role: "user", pkg: null, pdpa: false };
-const ORDER = ["company", "nameTh", "nameEn", "phone", "email", "role", "pkg", "pdpa"] as const;
+const EMPTY: Form = { companyId: "", nameTh: "", nameEn: "", phone: "", email: "", role: "user", pdpa: false };
+const ORDER = ["companyId", "nameTh", "nameEn", "phone", "email", "role", "pdpa"] as const;
 
 const fmtPhone = (d: string) => [d.slice(0, 3), d.slice(3, 6), d.slice(6, 10)].filter(Boolean).join("-");
 
 function toPayload(f: Form, lang: Lang) {
-  return { ...f, pkg: f.pkg ?? undefined, pdpa: f.pdpa ? (true as const) : undefined, lang };
+  return { ...f, pdpa: f.pdpa ? (true as const) : undefined, lang };
 }
 
 export default function Onboarding() {
@@ -40,13 +41,17 @@ export default function Onboarding() {
   const [tried, setTried] = useState(false);
   const [sending, setSending] = useState(false);
   const [srvMsg, setSrvMsg] = useState("");
+  const [srvFieldErr, setSrvFieldErr] = useState<Record<string, ErrCode>>({});
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [captchaReset, setCaptchaReset] = useState(0);
   const [requestNo, setRequestNo] = useState("");
   const [checkingFriend, setCheckingFriend] = useState(false);
+  const [companies, setCompanies] = useState<CompanyState>({ status: "loading" });
   const liffRef = useRef<Liff | null>(null);
   const preview = useRef(false);
   const alertRef = useRef<HTMLDivElement>(null);
+
+  const idToken = () => (preview.current ? "preview-token" : liffRef.current?.getIDToken() ?? null);
 
   // ---------- LIFF boot ----------
   const checkFriend = useCallback(async () => {
@@ -68,7 +73,7 @@ export default function Onboarding() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("lang") === "en") setLang("en");
 
-    // Local UI preview without LINE (never in production builds).
+    // Local browser test without LINE (never in production builds).
     if (process.env.NODE_ENV !== "production" && params.get("preview") === "1") {
       preview.current = true;
       setDisplayName("Test");
@@ -100,16 +105,43 @@ export default function Onboarding() {
     return () => { alive = false; };
   }, [checkFriend]);
 
+  // ---------- Company list (from Companies_DB, via the server) ----------
+  const loadCompanies = useCallback(async () => {
+    const token = idToken();
+    if (!token) { setCompanies({ status: "error" }); return; }
+    setCompanies({ status: "loading" });
+    try {
+      const res = await fetch("/api/companies", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const body = await res.json();
+      if (!res.ok || !Array.isArray(body.companies)) throw new Error();
+      setCompanies({ status: "ok", list: body.companies });
+    } catch {
+      setCompanies({ status: "error" });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (phase === "form" && companies.status === "loading") loadCompanies();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  const companyName = companies.status === "ok"
+    ? companies.list.find((c) => c.id === f.companyId)?.name ?? ""
+    : "";
+
   // ---------- Validation (same schema as the server) ----------
   const errors = useMemo<Record<string, ErrCode>>(() => {
     if (!tried) return {};
     const r = registrationSchema.safeParse(toPayload(f, lang));
-    return r.success ? {} : fieldErrors(r.error);
-  }, [f, lang, tried]);
+    return { ...srvFieldErr, ...(r.success ? {} : fieldErrors(r.error)) };
+  }, [f, lang, tried, srvFieldErr]);
   const errCount = Object.keys(errors).length;
   const errText = (k: string) => (errors[k] ? t.e[errors[k]] : "");
 
-  const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((s) => ({ ...s, [k]: v }));
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => {
+    setF((s) => ({ ...s, [k]: v }));
+    if (srvFieldErr[k]) setSrvFieldErr(({ [k]: _drop, ...rest }) => rest);
+  };
 
   // ---------- Submit ----------
   async function submit(e: React.FormEvent) {
@@ -120,21 +152,21 @@ export default function Onboarding() {
     const parsed = registrationSchema.safeParse(toPayload(f, lang));
     if (!parsed.success) {
       const first = ORDER.find((k) => fieldErrors(parsed.error)[k]);
-      document.getElementById(first === "pkg" ? "pkg-group" : first === "role" ? "role-group" : first ?? "")?.focus();
+      document.getElementById(first === "role" ? "role-group" : first ?? "")?.focus();
       alertRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
     if (TURNSTILE_KEY && !captcha) { setSrvMsg(t.captchaWait); return; }
 
-    const idToken = preview.current ? "preview-token" : liffRef.current?.getIDToken();
-    if (!idToken) { setSrvMsg(t.srv.line_auth); return; }
+    const token = idToken();
+    if (!token) { setSrvMsg(t.srv.line_auth); return; }
 
     setSending(true);
     try {
       const res = await fetch("/api/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...parsed.data, idToken, turnstileToken: captcha ?? "missing" }),
+        body: JSON.stringify({ ...parsed.data, idToken: token, turnstileToken: captcha ?? "missing" }),
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok && body.requestNo) {
@@ -144,6 +176,11 @@ export default function Onboarding() {
         return;
       }
       switch (body.error) {
+        case "invalid":
+          // e.g. the company was removed from Companies_DB after the page loaded
+          setSrvFieldErr(body.fields ?? {});
+          if (body.fields?.companyId) loadCompanies();
+          break;
         case "captcha": setSrvMsg(t.srv.captcha); break;
         case "line_auth": setSrvMsg(t.srv.line_auth); break;
         case "duplicate": setSrvMsg(t.srv.duplicate(body.requestNo ?? "")); break;
@@ -234,7 +271,6 @@ export default function Onboarding() {
 
   if (phase === "done") {
     const role = ROLES.find((r) => r.id === f.role)!;
-    const pkg = PKGS.find((p) => p.id === f.pkg)!;
     return (
       <>{header}
         <main className="wrap">
@@ -250,12 +286,11 @@ export default function Onboarding() {
             <div>
               <h3 style={{ fontSize: 16, marginBottom: 10 }}>{t.summary}</h3>
               <dl className="sum">
-                <dt>{t.k.company}</dt><dd>{f.company}</dd>
+                <dt>{t.k.company}</dt><dd>{companyName}</dd>
                 <dt>{t.k.name}</dt><dd>{f.nameTh}<br />{f.nameEn}</dd>
                 <dt>{t.k.phone}</dt><dd>{fmtPhone(f.phone)}</dd>
-                {f.email && (<><dt>{t.k.email}</dt><dd>{f.email}</dd></>)}
+                <dt>{t.k.email}</dt><dd>{f.email}</dd>
                 <dt>{t.k.role}</dt><dd>{role[lang]}</dd>
-                <dt>{t.k.pkg}</dt><dd>{pkg.name}</dd>
               </dl>
             </div>
             {liffRef.current?.isInClient() && (
@@ -268,6 +303,7 @@ export default function Onboarding() {
   }
 
   // phase === "form"
+  const companyErr = errText("companyId");
   return (
     <>{header}
       <main className="wrap">
@@ -289,7 +325,30 @@ export default function Onboarding() {
 
           <fieldset>
             <legend><span className="num">01</span><span className="ttl">{t.sec1}</span></legend>
-            <TextField id="company" label={t.company} ph={t.companyPh} value={f.company} err={errText("company")} onChange={(v) => set("company", v)} autoComplete="organization" required />
+            <div className="field">
+              <label htmlFor="companyId">{t.company} <span className="req">*</span></label>
+              {companies.status === "error" ? (
+                <div className="row">
+                  <span className="err">{t.companyLoadErr}</span>
+                  <button type="button" className="btn ghost" onClick={loadCompanies}>{t.retry}</button>
+                </div>
+              ) : (
+                <select
+                  id="companyId" className="input select"
+                  value={f.companyId}
+                  onChange={(e) => set("companyId", e.target.value)}
+                  disabled={companies.status === "loading"}
+                  aria-invalid={!!companyErr} aria-describedby={companyErr ? "companyId-err" : "companyId-hint"}
+                >
+                  <option value="">{companies.status === "loading" ? t.companyLoading : t.companyPh}</option>
+                  {companies.status === "ok" && companies.list.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              )}
+              {companyErr && <span id="companyId-err" className="err">{companyErr}</span>}
+              <span id="companyId-hint" className="small">{t.companyMissing(OA)}</span>
+            </div>
           </fieldset>
 
           <fieldset>
@@ -305,8 +364,8 @@ export default function Onboarding() {
             <div className="grid2">
               <TextField id="phone" label={t.phone} ph="08X-XXX-XXXX" value={fmtPhone(f.phone)} err={errText("phone")}
                 onChange={(v) => set("phone", v.replace(/\D/g, "").slice(0, 10))} type="tel" inputMode="numeric" autoComplete="tel" required />
-              <TextField id="email" label={t.email} optional={t.optional} ph="name@company.co.th" value={f.email} err={errText("email")}
-                onChange={(v) => set("email", v)} type="email" autoComplete="email" />
+              <TextField id="email" label={t.email} ph="name@company.co.th" value={f.email} err={errText("email")}
+                onChange={(v) => set("email", v)} type="email" autoComplete="email" required />
             </div>
           </fieldset>
 
@@ -328,26 +387,6 @@ export default function Onboarding() {
 
           <fieldset>
             <legend><span className="num">05</span><span className="ttl">{t.sec5}</span></legend>
-            <div className="choices" role="radiogroup" id="pkg-group" tabIndex={-1} aria-label={t.sec5} aria-describedby="pkg-err">
-              {PKGS.map((p) => (
-                <button key={p.id} type="button" role="radio" aria-checked={f.pkg === p.id}
-                  className={`choice${errors.pkg ? " bad" : ""}`} onClick={() => set("pkg", p.id)}>
-                  <span className="dot" aria-hidden />
-                  <span className="choice-body">
-                    <span className="choice-title">{p.name}{p.id === RECOMMENDED && <span className="tag">{t.recommended}</span>}</span>
-                    <span className="price">{p.price ?? t.contactSales}{p.price && <small>{t.perMonth}</small>}</span>
-                    <span className="choice-sub">{lang === "th" ? p.lth : p.len}</span>
-                    <ul className="feat">{(lang === "th" ? p.fth : p.fen).map((x) => <li key={x}>{x}</li>)}</ul>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <span id="pkg-err" className="err">{errText("pkg")}</span>
-            <span className="small">{t.pkgNote}</span>
-          </fieldset>
-
-          <fieldset>
-            <legend><span className="num">06</span><span className="ttl">{t.sec6}</span></legend>
             <label className="consent">
               <input id="pdpa" type="checkbox" checked={f.pdpa} onChange={(e) => set("pdpa", e.target.checked)} aria-invalid={!!errors.pdpa} />
               <span>{t.pdpa} <a href={PRIVACY_URL} target="_blank" rel="noreferrer">{t.pdpaLink}</a> <span className="req">*</span></span>

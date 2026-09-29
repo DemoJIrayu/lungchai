@@ -85,6 +85,13 @@ legend .ttl { font-family: var(--display); font-size: 20px; }
 }
 .input:focus { outline: 2px solid var(--accent-fill); outline-offset: 1px; border-color: var(--accent); }
 .input[aria-invalid="true"] { border-color: var(--danger); }
+.select {
+  appearance: none; -webkit-appearance: none; padding-right: 40px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2356616d' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center;
+}
+.select:disabled { color: var(--muted); cursor: default; }
+.row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .err { font-size: 13px; color: var(--danger); }
 
 .alert { padding: 12px 14px; border: 1px solid var(--danger); background: var(--danger-bg); color: #7a241d; font-size: 14px; }

@@ -28,13 +28,13 @@ export const COLUMNS = [
   "status",           // C  pending | approved | rejected  (admin edits this)
   "line_user_id",     // D  verified by LINE, never typed by the user
   "line_display_name",// E
-  "company",          // F
-  "name_th",          // G
-  "name_en",          // H
-  "phone",            // I
-  "email",            // J
-  "role",             // K
-  "package",          // L
+  "company_id",       // F  from Companies_DB, checked by the server
+  "company_name",     // G  looked up by the server from company_id
+  "name_th",          // H
+  "name_en",          // I
+  "phone",            // J
+  "email",            // K
+  "role",             // L
   "consent_version",  // M
   "consented_at",     // N
   "lang",             // O
@@ -52,14 +52,79 @@ function client() {
   return new JWT({ email, key, scopes: SCOPES });
 }
 
+const quoteTab = (tab: string) => `'${tab.replace(/'/g, "''")}'`;
 function sheetCfg() {
   const id = process.env.SHEET_ID;
   if (!id) throw new Error("SHEET_ID is not set");
-  const tab = process.env.SHEET_TAB || "Registrations";
-  return { id, tab: `'${tab.replace(/'/g, "''")}'` };
+  return { id, tab: quoteTab(process.env.SHEET_TAB || "Registrations") };
 }
 
 const base = "https://sheets.googleapis.com/v4/spreadsheets";
+
+// ---------------------------------------------------------------------------
+// Companies_DB
+// ---------------------------------------------------------------------------
+
+export type Company = { id: string; name: string };
+
+/** Sample list for browser test mode when no sheet is configured. */
+const SAMPLE_COMPANIES: Company[] = [
+  { id: "C001", name: "?????? ?????? ????? ?????" },
+  { id: "C002", name: "?????? ????? ?????????? ?????" },
+  { id: "C003", name: "Sample Fleet Co., Ltd." },
+];
+
+const CACHE_MS = 5 * 60_000;
+let cache: { at: number; list: Company[] } | null = null;
+
+/**
+ * Read Company_Name / Company_ID from the Companies_DB tab.
+ * Columns are found by header name, so their position in the sheet doesn't matter.
+ * Cached for 5 minutes per server instance; new companies appear within that time.
+ */
+export async function getCompanies(): Promise<Company[]> {
+  if (cache && Date.now() - cache.at < CACHE_MS) return cache.list;
+
+  const id = process.env.COMPANIES_SHEET_ID || process.env.SHEET_ID;
+  if (!id && devBrowserTest) return SAMPLE_COMPANIES;
+  if (!id) throw new Error("SHEET_ID is not set");
+
+  const tab = quoteTab(process.env.COMPANIES_TAB || "Companies_DB");
+  const range = encodeURIComponent(`${tab}!A:Z`);
+  const res = await client().request<{ values?: string[][] }>({
+    url: `${base}/${id}/values/${range}?valueRenderOption=FORMATTED_VALUE`,
+  });
+
+  const [header = [], ...rows] = res.data.values ?? [];
+  const norm = (s: string) => s.trim().toLowerCase();
+  const iName = header.findIndex((h) => norm(h) === "company_name");
+  const iId = header.findIndex((h) => norm(h) === "company_id");
+  if (iName < 0 || iId < 0) {
+    throw new Error("Companies_DB must have Company_Name and Company_ID headers in row 1");
+  }
+
+  const seen = new Set<string>();
+  const list: Company[] = [];
+  for (const r of rows) {
+    const cid = String(r[iId] ?? "").trim();
+    const name = String(r[iName] ?? "").trim();
+    if (!cid || !name || seen.has(cid)) continue;
+    seen.add(cid);
+    list.push({ id: cid, name });
+  }
+  list.sort((a, b) => a.name.localeCompare(b.name, "th"));
+
+  cache = { at: Date.now(), list };
+  return list;
+}
+
+export async function findCompany(companyId: string): Promise<Company | null> {
+  return (await getCompanies()).find((c) => c.id === companyId) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Registrations
+// ---------------------------------------------------------------------------
 
 /** Return the request number of a pending row for this LINE user, if any. */
 export async function findPending(lineUserId: string): Promise<string | null> {
@@ -88,6 +153,7 @@ export async function appendRegistration(args: {
   requestNo: string;
   lineUserId: string;
   lineDisplayName: string;
+  company: Company;
   data: Registration;
   consentVersion: string;
 }) {
@@ -100,13 +166,13 @@ export async function appendRegistration(args: {
     "pending",
     args.lineUserId,
     args.lineDisplayName,
-    data.company,
+    args.company.id,
+    args.company.name,
     data.nameTh,
     data.nameEn,
     data.phone,
     data.email,
     data.role,
-    data.pkg,
     args.consentVersion,
     now,
     data.lang,
