@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request) {
   try {
-    const who = await resolveUser(bearer(req));
+    const who = await resolveUser(bearer(req), "companies");
     if (!who) return NextResponse.json({ error: "line_auth" }, { status: 401 });
 
     const companies = await getCompanies();

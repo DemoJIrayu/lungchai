@@ -53,6 +53,7 @@ function client() {
 }
 
 const quoteTab = (tab: string) => `'${tab.replace(/'/g, "''")}'`;
+
 function sheetCfg() {
   const id = process.env.SHEET_ID;
   if (!id) throw new Error("SHEET_ID is not set");

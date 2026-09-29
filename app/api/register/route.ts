@@ -34,7 +34,7 @@ export async function POST(req: Request) {
   try {
     // 2. Who is this? Verified by LINE, not by the browser.
     //    Browser test mode (local dev only) gives a fake TEST- user.
-    const who = await resolveUser(idToken);
+    const who = await resolveUser(idToken, "register");
     if (!who) return fail(401, { error: "line_auth" });
 
     // 3. Human check. Browser test mode may skip it when no secret is configured.

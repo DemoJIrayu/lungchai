@@ -22,13 +22,13 @@ const RETENTION_DAYS = 365;
 
 const COL = {
   requestNo: 1, submittedAt: 2, status: 3, lineUserId: 4, lineDisplayName: 5,
-  company: 6, nameTh: 7, nameEn: 8, phone: 9, email: 10, role: 11, pkg: 12,
+  companyId: 6, companyName: 7, nameTh: 8, nameEn: 9, phone: 10, email: 11, role: 12,
   consentVersion: 13, consentedAt: 14, lang: 15, adminNote: 16, decidedAt: 17, notifiedAt: 18,
 };
 
 const HEADERS = [
   'request_no', 'submitted_at', 'status', 'line_user_id', 'line_display_name',
-  'company', 'name_th', 'name_en', 'phone', 'email', 'role', 'package',
+  'company_id', 'company_name', 'name_th', 'name_en', 'phone', 'email', 'role',
   'consent_version', 'consented_at', 'lang', 'admin_note', 'decided_at', 'notified_at',
 ];
 
