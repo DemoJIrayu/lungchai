@@ -51,7 +51,45 @@ export default function Onboarding() {
   const preview = useRef(false);
   const alertRef = useRef<HTMLDivElement>(null);
 
-  const idToken = () => (preview.current ? "preview-token" : liffRef.current?.getIDToken() ?? null);
+  /**
+   * A LINE ID token that is still valid.
+   * LIFF caches the token inside the LINE app; if it has expired we log in again
+   * (silent inside LINE) and the page reloads with a fresh token. Returns null then.
+   */
+  const idToken = (): string | null => {
+    if (preview.current) return "preview-token";
+    const liff = liffRef.current;
+    if (!liff) return null;
+    const token = liff.getIDToken();
+    if (!token) {
+      console.error("LIFF returned no ID token. Add the 'openid' scope to the LIFF app in LINE Developers.");
+      return null;
+    }
+    const exp = liff.getDecodedIDToken()?.exp ?? 0;
+    if (exp && exp * 1000 < Date.now() + 60_000) {
+      relogin();
+      return null;
+    }
+    return token;
+  };
+
+  /** Log in again once per page session, to replace a stale token. */
+  const relogin = (): boolean => {
+    const liff = liffRef.current;
+    if (!liff) return false;
+    try {
+      if (sessionStorage.getItem("lc-relogin")) return false; // already tried; avoid a loop
+      sessionStorage.setItem("lc-relogin", "1");
+    } catch { /* storage blocked: still try once */ }
+    liff.logout();
+    liff.login({ redirectUri: window.location.href });
+    return true;
+  };
+
+  const authHeaders = (token: string) => ({
+    Authorization: `Bearer ${token}`,
+    "X-Line-Id-Token": token, // some hosts strip Authorization
+  });
 
   // ---------- LIFF boot ----------
   const checkFriend = useCallback(async () => {
@@ -111,10 +149,12 @@ export default function Onboarding() {
     if (!token) { setCompanies({ status: "error" }); return; }
     setCompanies({ status: "loading" });
     try {
-      const res = await fetch("/api/companies", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const res = await fetch("/api/companies", { headers: authHeaders(token), cache: "no-store" });
+      if (res.status === 401 && relogin()) return; // stale token: fresh login, page reloads
       const body = await res.json();
       if (!res.ok || !Array.isArray(body.companies)) throw new Error();
       setCompanies({ status: "ok", list: body.companies });
+      try { sessionStorage.removeItem("lc-relogin"); } catch { /* ignore */ }
     } catch {
       setCompanies({ status: "error" });
     }
