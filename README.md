@@ -47,6 +47,7 @@ because otherwise the approval message can't be delivered.
 app/page.tsx                 renders the form
 app/api/register/route.ts    saves a registration
 app/api/companies/route.ts   company list for the dropdown (LINE sign-in required)
+app/api/health/route.ts      setup check: which settings are present, can Companies_DB be read
 components/Onboarding.tsx    LIFF boot, friendship gate, form, success screen
 components/Turnstile.tsx     Cloudflare Turnstile widget
 lib/schema.ts                zod schema shared by client + server, roles
@@ -101,7 +102,9 @@ Cloudflare dashboard → Turnstile → add a widget for your Vercel domain → c
    - Add friend option: **On (normal)**
 2. In the LINE Login channel → Basic settings → **Linked LINE Official Account** → select @379iftpg.
    (Needed for the friendship check.)
-3. Copy the LIFF ID and the LINE Login channel ID.
+3. Copy the LIFF ID. `LINE_LOGIN_CHANNEL_ID` is optional: the server reads the channel from the
+   LIFF ID (`<channelId>-xxxx`). If you do set it, it must be the **LINE Login** channel ID,
+   not the Messaging API channel ID of @379iftpg.
 4. Rich menu → the "Register" button action = Link → `https://liff.line.me/<LIFF_ID>`.
 
 ### 5. Deploy on Vercel
@@ -109,6 +112,35 @@ Cloudflare dashboard → Turnstile → add a widget for your Vercel domain → c
 2. Add every variable from `.env.example`. For `GOOGLE_PRIVATE_KEY`, paste the key exactly as
    in the JSON file (with `\n`).
 3. Deploy, then put the production URL into the LIFF endpoint URL.
+
+### Other hosts (e.g. Hostinger Node.js)
+- `NEXT_PUBLIC_*` variables are baked into the page at **build** time. Set them before
+  `npm run build`, and rebuild after changing them. The other variables are read at runtime;
+  restart the app after changing them.
+- Start with `npm run build` then `npm start` (Node 18.18+).
+- The page sends the LINE token both as `Authorization` and as `X-Line-Id-Token`, because some
+  shared-host proxies strip `Authorization`.
+
+## Troubleshooting
+
+Open **`https://<your-domain>/api/health`**. It lists missing settings, a LIFF/channel ID
+mismatch, and whether `Companies_DB` can be read. It never shows secret values.
+
+The server log explains every 401 on `/api/companies` or `/api/register`:
+
+| Log line | Fix |
+|---|---|
+| `no LINE ID token in the request` | LIFF app → Scopes → tick **openid**, then close and reopen the LIFF page |
+| `LINE verify 400: Invalid IdToken Audience.` or a `does not match the channel` warning | `LINE_LOGIN_CHANNEL_ID` is wrong (often the Messaging API channel). Fix it or delete it |
+| `LINE verify 400: IdToken expired.` | should self-heal (the page logs in again once); if it repeats, check the server clock |
+| `no channel id` | `NEXT_PUBLIC_LIFF_ID` isn't set on the server |
+
+If `/api/health` shows `companiesDb: error …` instead:
+- `The caller does not have permission`: share the spreadsheet with the service account email as Editor.
+- `Unable to parse range`: the tab isn't named exactly `Companies_DB` (check `COMPANIES_TAB`).
+- `must have Company_Name and Company_ID headers`: fix row 1 of `Companies_DB`.
+- `DECODER routines` / `invalid_grant`: `GOOGLE_PRIVATE_KEY` was pasted wrongly; keep the
+  `-----BEGIN/END PRIVATE KEY-----` lines and the `\n` sequences, wrapped in double quotes.
 
 ## Local development
 
